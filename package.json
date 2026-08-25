@@ -1,0 +1,76 @@
+{
+  "name": "dsh-vendor-login",
+  "version": "0.1.0",
+  "description": "Sign in to vendor coding plans that have no API key at all (Claude Pro/Max/Team, ChatGPT Plus/Pro, GitHub Copilot, SuperGrok) from the dsh settings UI",
+  "keywords": [
+    "dsh-plugin",
+    "oauth",
+    "anthropic",
+    "openai",
+    "github-copilot",
+    "xai"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MochiNek0/dsh-vendor-login.git"
+  },
+  "bugs": {
+    "url": "https://github.com/MochiNek0/dsh-vendor-login/issues"
+  },
+  "homepage": "https://github.com/MochiNek0/dsh-vendor-login#readme",
+  "dsh": {
+    "name": "vendor-login",
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
+      ]
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "dist",
+    "cordis.patch.yml"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json && tsc -p tsconfig.client.json && node wrap-client.cjs",
+    "prepublishOnly": "pnpm run build"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@types/node": "^18.0.0",
+    "@types/react": "^19.2.18",
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "license": "MIT"
+}

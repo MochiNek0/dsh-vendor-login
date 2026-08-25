@@ -1,0 +1,18 @@
+# dsh bundle patch for dsh-vendor-login.
+#
+# One insert and nothing else. The authorization seam this plugin needs
+# (`@deepseek-ai/dsh-authorization`) is deliberately NOT inserted here as a
+# second row: dsh-base does not mount it, but it IS resolvable from the profile
+# directory, and mounting it from our own `apply()` (anchored on `ctx.baseUrl`,
+# the same trick dsh-web-search-free uses for tool-web) guarantees we mount the
+# very instance the running dsh ships rather than a second copy carrying its
+# own `@deepseek-ai/cordis` — which would register a service the host's
+# `ctx.inject(['authorization'])` consumers could not see.
+#
+# `@deepseek-ai/dsh-llm-pi-ai` is already mounted dormant by dsh-base and
+# registers one authorization flow per pi-ai provider that ships a login — but
+# only inside `ctx.inject(['authorization'], …)`. So mounting the seam is what
+# switches those flows on; this plugin adds the surface that drives them.
+- insert:
+    - id: vendor-login
+      name: 'dsh-vendor-login'
