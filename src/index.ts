@@ -16,10 +16,12 @@ export const name = 'vendor-login'
 export const inject = ['webServer', 'credentials']
 
 /**
- * Settings namespace this plugin owns. The browser card in `./client` is keyed
- * on this string: the Plugins settings tab dispatches `settings.plugin.item`
- * once per namespace the Host serves, so the two halves must spell it
- * identically — and a namespace the Host does not serve is never dispatched.
+ * Settings namespace this plugin owns — where the `vendors` list is stored.
+ *
+ * The browser half no longer keys on it: the sign-in UI now lives in the
+ * Models page's `settings.models.provider-card` slot, which is dispatched by
+ * the OWNING adapter's namespace (`llm-pi-ai`), not by ours. So this namespace
+ * is a settings address only, and editing `vendors` is a settings-file edit.
  */
 export const SETTINGS_NAMESPACE = 'vendor-login'
 
@@ -458,7 +460,7 @@ export function apply(ctx: Context, config: Config) {
     const raw = storedRoutes()[vendor.route]
 
     if (resolvedRoute !== undefined && !vendor.owns(raw)) {
-      return `llm-pi-ai 里已经有一条 "${vendor.route}" 路由，且不是本插件写的，因此保留未动。要用这次登录的话，请到「模型」设置页把它改掉或删掉。`
+      return `llm-pi-ai 里已经有一条 "${vendor.route}" 路由，且不是本插件写的，因此保留未动。要用这次登录的话，请把这条路由的配置改掉或删掉。`
     }
     if (sameProfile(raw, ours)) return null
 
@@ -565,7 +567,7 @@ export function apply(ctx: Context, config: Config) {
           // The sign-in itself succeeded and is durable. A route we could not
           // write is a smaller failure than reporting the whole login failed.
           sendEvent(res, 'warning', {
-            message: `登录成功，但未能自动写入 llm-pi-ai 路由：${err?.message ?? err}。请到「模型」设置页手动添加该 provider。`,
+            message: `登录成功，但未能自动写入 llm-pi-ai 路由：${err?.message ?? err}。请为该 provider 手动添加一条路由。`,
           })
         }
       }

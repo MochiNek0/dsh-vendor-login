@@ -1,6 +1,6 @@
 {
   "name": "dsh-vendor-login",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Sign in to vendor coding plans that have no API key at all (Claude Pro/Max/Team, ChatGPT Plus/Pro, GitHub Copilot, SuperGrok) from the dsh settings UI",
   "keywords": [
     "dsh-plugin",
@@ -25,7 +25,7 @@
       "inject": [
         "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-ui-settings",
-        "@deepseek-ai/dsh-client-ui-settings-plugins"
+        "@deepseek-ai/dsh-client-ui-settings-models"
       ]
     },
     "bundle": {

@@ -1,11 +1,17 @@
 import * as React from 'react'
 
 /**
- * Must equal the namespace the Host half registers: the Plugins settings tab
- * dispatches `settings.plugin.item` once per served namespace, using it as the
- * keyed slot's entry key.
+ * The settings namespace `@deepseek-ai/dsh-llm-pi-ai` registers under, which is
+ * also the `settingsNs` every one of its Models-page rows carries.
+ *
+ * `settings.models.provider-card` is dispatched keyed on that namespace, so a
+ * single registration here receives EVERY pi-ai row — catalog, configured, and
+ * hand-declared alike — and the component decides which of them this plugin has
+ * anything to say about. Keying on the adapter family rather than on a vendor
+ * is the slot's own design: the Models section never learns what the namespace
+ * means.
  */
-const NAMESPACE = 'vendor-login'
+const PI_AI = 'llm-pi-ai'
 
 /** Must equal `ROUTE_PREFIX` in the Host half. */
 const ROUTE_PREFIX = '/plugin/vendor-login'
@@ -15,7 +21,8 @@ const ROUTE_PREFIX = '/plugin/vendor-login'
  * is served by the same `webServer` the Host half registered its routes on.
  * `@deepseek-ai/dsh-api-remotes` is not an option — its capability set is fixed
  * by build-time value imports, so a plugin distributed outside that repository
- * cannot add a method to it.
+ * cannot add a method to it. The authorization seam has no remote of its own
+ * either, so the Models page gets the surface but not the transport.
  */
 async function call(path: string, init?: RequestInit): Promise<any> {
   const res = await fetch(`${ROUTE_PREFIX}${path}`, { cache: 'no-store', ...init })
@@ -67,34 +74,94 @@ interface Session {
   warning?: string
 }
 
+// ---- shared host state -----------------------------------------------------
+
+/**
+ * One `/state` read shared by every mounted card.
+ *
+ * pi-ai declares a Models-page row for its whole installed catalog, so this
+ * component mounts a dozen-plus times on one page. A fetch per mount would be
+ * that many identical requests on load, and that many again after each sign-in
+ * settles; subscribing to one store is what keeps the card's cost independent
+ * of how many providers pi-ai happens to ship.
+ */
+interface Snapshot { state: HostState | null; error: string }
+
+let snapshot: Snapshot = { state: null, error: '' }
+const listeners = new Set<() => void>()
+let inFlight: Promise<void> | null = null
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener)
+  return () => { listeners.delete(listener) }
+}
+
+/**
+ * Re-read `/state` into the shared snapshot.
+ *
+ * Concurrent calls join the request in flight rather than starting a second:
+ * a sign-in settling refreshes every subscriber at once, and each of them
+ * asking separately would answer the same question N times.
+ */
+function refresh(): Promise<void> {
+  if (inFlight) return inFlight
+  inFlight = call('/state')
+    .then((state: HostState) => { snapshot = { state, error: '' } })
+    // The last good state is kept beside the error: a failed refresh should
+    // leave the rows readable rather than blanking every card on the page.
+    .catch((err: any) => { snapshot = { state: snapshot.state, error: err?.message ?? String(err) } })
+    .finally(() => {
+      inFlight = null
+      for (const listener of listeners) listener()
+    })
+  return inFlight
+}
+
+function useHostState(): Snapshot {
+  const value = React.useSyncExternalStore(subscribe, () => snapshot)
+  React.useEffect(() => {
+    if (snapshot.state === null && !inFlight) void refresh()
+  }, [])
+  return value
+}
+
 export const inject = ['slots']
 
 export function apply(ctx: any) {
-  ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
-    name: 'settings.plugin.item',
-    key: NAMESPACE,
-  }, VendorLoginCard))
+  ctx.slots.inject('settings.models.provider-card', () => ctx.slots.register({
+    name: 'settings.models.provider-card',
+    key: PI_AI,
+  }, ProviderSignIn))
+
+  // The provider cards are the whole UI now, and a card renders nothing at all
+  // when the seam did not come up — so the one fact that has no card to live in
+  // is "sign-in is unavailable, and here is why". This entry renders nothing
+  // whenever there is nothing wrong.
+  ctx.slots.inject('settings.models.footer', () => ctx.slots.register({
+    name: 'settings.models.footer',
+    id: 'vendor-login-diagnostics',
+  }, SignInDiagnostics))
 }
 
-function VendorLoginCard() {
-  const [open, setOpen] = React.useState(false)
-  const [state, setState] = React.useState<HostState | null>(null)
-  const [loadError, setLoadError] = React.useState('')
+/**
+ * The sign-in area inside one pi-ai provider card.
+ *
+ * @param props - the slot's owner share; only `provider.provider` (the route
+ *   id, which is also the pi-ai provider id) is read. `configured` and
+ *   `keyConfigured` describe the row's settings profile, whereas every fact
+ *   this component shows is a credential-store or authorization-seam fact the
+ *   Host half already joined.
+ */
+function ProviderSignIn(props: any) {
+  const id: string = props?.provider?.provider ?? ''
+  const { state } = useHostState()
+
   const [session, setSession] = React.useState<Session | null>(null)
   const [draft, setDraft] = React.useState('')
-  const [busy, setBusy] = React.useState('')
+  const [busy, setBusy] = React.useState(false)
+  /** A failed sign-out, which has no session panel to report itself in. */
+  const [actionError, setActionError] = React.useState('')
   const stream = React.useRef<EventSource | null>(null)
-
-  const refresh = React.useCallback(async () => {
-    try {
-      setState(await call('/state'))
-      setLoadError('')
-    } catch (err: any) {
-      setLoadError(err?.message ?? String(err))
-    }
-  }, [])
-
-  React.useEffect(() => { void refresh() }, [refresh])
 
   // The stream is the attempt: closing it aborts the flow host-side (the Host
   // half withdraws on the response's `close`), so this doubles as the teardown
@@ -109,8 +176,8 @@ function VendorLoginCard() {
    *
    * Parsing here rather than inside the `patch` updater is deliberate: React
    * calls an updater during the RENDER that follows, so a parse throwing in
-   * there is a render-phase crash — and the Plugins tab drops a slot entry
-   * whose component crashed, which takes the whole card off the page.
+   * there is a render-phase crash — and the slot machinery retires an entry
+   * whose component crashed, which takes the sign-in off every card at once.
    */
   const payload = (e: any): any => {
     if (typeof e?.data !== 'string') return undefined
@@ -121,12 +188,12 @@ function VendorLoginCard() {
     }
   }
 
-  const startLogin = (vendor: string, method?: string) => {
+  const startLogin = (method?: string) => {
     stream.current?.close()
     setDraft('')
-    setSession({ vendor, notices: [] })
+    setSession({ vendor: id, notices: [] })
 
-    const query = new URLSearchParams({ vendor })
+    const query = new URLSearchParams({ vendor: id })
     if (method) query.set('method', method)
     const es = new EventSource(`${ROUTE_PREFIX}/login?${query.toString()}`)
     stream.current = es
@@ -201,35 +268,34 @@ function VendorLoginCard() {
     }).catch(() => {})
   }
 
-  const cancel = async (vendor: string) => {
+  const cancel = async () => {
     await call('/cancel', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ vendor }),
+      body: JSON.stringify({ vendor: id }),
     }).catch(() => {})
     stream.current?.close()
     patch((prev) => (prev.status ? prev : { ...prev, prompt: undefined, status: 'cancelled' }))
     void refresh()
   }
 
-  const signout = async (vendor: string) => {
-    setBusy(vendor)
+  const signout = async () => {
+    setBusy(true)
+    setActionError('')
     try {
       await call('/signout', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ vendor }),
+        body: JSON.stringify({ vendor: id }),
       })
-      setSession((prev) => (prev?.vendor === vendor ? null : prev))
+      setSession(null)
       await refresh()
     } catch (err: any) {
-      setLoadError(err?.message ?? String(err))
+      setActionError(err?.message ?? String(err))
     } finally {
-      setBusy('')
+      setBusy(false)
     }
   }
-
-  const running = session !== null && session.status === undefined
 
   const promptForm = (prompt: Prompt) => {
     if (prompt.kind === 'select') {
@@ -239,7 +305,7 @@ function VendorLoginCard() {
             key: option.id,
             type: 'button',
             onClick: () => void answer(option.id),
-            style: { ...btnOutlineStyle, textAlign: 'left' as const },
+            style: { ...btnOutlineStyle, height: 'auto', padding: '6px 10px', textAlign: 'left' as const },
           },
             React.createElement('span', { style: { color: 'var(--dsw-alias-label-primary)' } }, option.label),
             option.description
@@ -264,7 +330,7 @@ function VendorLoginCard() {
       React.createElement('button', {
         type: 'submit',
         disabled: draft.trim() === '',
-        style: { ...btnPrimaryStyle, opacity: draft.trim() === '' ? 0.5 : 1 },
+        style: { ...btnPrimaryStyle, opacity: draft.trim() === '' ? 0.4 : 1 },
       }, '提交'),
     )
   }
@@ -318,7 +384,7 @@ function VendorLoginCard() {
 
     if (session.status === 'authorized') {
       children.push(React.createElement('span', { key: 's', style: { fontSize: 13, color: 'var(--dsw-alias-label-primary)' } },
-        session.warning ?? '登录成功。该 provider 的模型已写入 llm-pi-ai 路由，可在模型选择器里直接选。'))
+        session.warning ?? '登录成功。这个 provider 的模型已可在模型选择器里直接选。'))
     }
     if (session.status === 'cancelled') {
       children.push(React.createElement('span', { key: 's', style: { fontSize: 13, color: 'var(--dsw-alias-label-tertiary)' } }, '登录已取消。'))
@@ -330,179 +396,146 @@ function VendorLoginCard() {
     children.push(
       React.createElement('div', { key: 'a', style: { display: 'flex', gap: 8 } },
         session.status === undefined
-          ? React.createElement('button', { type: 'button', onClick: () => void cancel(session.vendor), style: btnOutlineStyle }, '取消登录')
+          ? React.createElement('button', { type: 'button', onClick: () => void cancel(), style: btnOutlineStyle }, '取消登录')
           : React.createElement('button', { type: 'button', onClick: () => setSession(null), style: btnOutlineStyle }, '收起'),
       ),
     )
 
     return React.createElement('div', {
+      key: 'session',
       style: {
         display: 'flex', flexDirection: 'column', gap: 10,
-        borderRadius: 8, padding: '10px 12px',
-        border: '1px solid var(--dsw-alias-border-l2)',
-        background: 'var(--dsw-alias-bg-layer-2)',
+        borderRadius: 12, padding: '10px 12px',
+        background: 'var(--dsw-alias-bg-module-platform)',
       },
     }, ...children)
   }
 
-  const cardBody = () => {
-    if (loadError) return [text(`读取状态失败：${loadError}`)]
-    if (!state) return [text('正在读取登录状态…')]
-    // The Host half checks the seam's contract at startup, so a version skew
-    // has a name by the time it gets here — show it instead of sending the user
-    // to the log for something already known.
-    if (!state.authorization) {
-      return [text(state.error
-        ? `登录不可用：${state.error}`
-        : '授权服务未挂载——本插件的宿主半边没能加载 @deepseek-ai/dsh-authorization，登录不可用。请查看 dsh 日志。')]
-    }
+  // Nothing to say about this row until the state is in, and nothing to say at
+  // all about the pi-ai rows outside the `vendors` list — which is most of the
+  // catalog. Both render as an absent area rather than an empty one.
+  const vendor = state?.vendors.find((row) => row.id === id)
+  if (!vendor) return null
 
-    const children: React.ReactNode[] = []
-    // Mounted, but not speaking what this plugin calls: the rows still render
-    // (signed-in state is read from the credential store, not the seam), so the
-    // reason belongs above them rather than in place of them.
-    if (state.error) {
-      children.push(
-        React.createElement('div', { key: 'err', style: { fontSize: 13, color: 'var(--dsw-alias-label-primary)' } }, state.error),
-      )
-    }
-    children.push(
-      React.createElement('div', { key: 'intro', style: { fontSize: 13, color: 'var(--dsw-alias-label-tertiary)' } },
-        '这里只收那些拿不到 API Key、不登录就用不了的订阅套餐——能自己申请到 API Key 的厂商，直接去「模型」设置页配一条 apiKeyEnv 就行，不必绕这里。登录在 dsh 宿主进程里完成，令牌存进 dsh 的凭据库并自动续期；浏览器这边只负责显示要打开的页面和要填的值。'),
-    )
-
-    for (const vendor of state.vendors) {
-      const active = session?.vendor === vendor.id
-      const badge = vendor.inFlight && !active ? '其他窗口登录中'
-        : vendor.signedIn ? '已登录'
-        : '未登录'
-      children.push(
-        React.createElement('div', {
-          key: vendor.id,
-          style: {
-            display: 'flex', flexDirection: 'column', gap: 10,
-            borderRadius: 8, padding: '10px 12px',
-            border: '1px solid var(--dsw-alias-border-l2)',
-            background: 'var(--dsw-alias-bg-layer-3)',
-          },
-        },
-          React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 } },
-            React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0 } },
-              React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-                React.createElement('span', { style: { fontSize: 13, fontWeight: 500, color: 'var(--dsw-alias-label-primary)' } }, vendor.label),
-                React.createElement('span', {
-                  style: {
-                    whiteSpace: 'nowrap' as const, borderRadius: 999, padding: '1px 8px', fontSize: 11, fontWeight: 500, lineHeight: '17px',
-                    ...(vendor.signedIn
-                      ? { background: 'var(--dsw-alias-bg-module-platform)', color: 'var(--dsw-alias-label-secondary)' }
-                      : { color: 'var(--dsw-alias-label-tertiary)' }),
-                  },
-                }, badge),
-              ),
-              React.createElement('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)' } },
-                !vendor.available ? `没有为 "${vendor.id}" 注册登录流程——检查 vendors 设置里的 provider id。`
-                  : vendor.methods.length === 0 ? `"${vendor.id}" 只提供 API Key，没有账号登录——这不归这张卡片管，去「模型」设置页给它配一条 apiKeyEnv 即可。`
-                  : vendor.foreignRoute ? `llm-pi-ai 的 "${vendor.route}" 路由已被别处配置，本插件不会覆盖它；模型走的是那条配置。`
-                  : vendor.signedIn && vendor.routed ? `已接入模型选择器（llm-pi-ai 路由 ${vendor.route}）`
-                  : vendor.signedIn ? '已登录，但 llm-pi-ai 里没有对应路由；模型不会出现在选择器里。'
-                  : `provider id：${vendor.id}`),
-            ),
-            ...(vendor.available
-              ? [
-                  vendor.signedIn
-                    ? React.createElement('button', {
-                        type: 'button',
-                        disabled: busy === vendor.id,
-                        onClick: () => void signout(vendor.id),
-                        style: { ...btnOutlineStyle, flex: 'none' as const },
-                      }, busy === vendor.id ? '登出中…' : '登出')
-                    : null,
-                  vendor.methods[0]
-                    ? React.createElement('button', {
-                        type: 'button',
-                        disabled: running,
-                        onClick: () => startLogin(vendor.id, vendor.methods[0].id),
-                        style: { ...btnPrimaryStyle, flex: 'none' as const, opacity: running ? 0.5 : 1 },
-                      }, vendor.methods[0].label)
-                    : null,
-                ]
-              : []),
-          ),
-          active ? sessionPanel() : null,
-        ),
-      )
-    }
-
-    return children
+  if (!vendor.available) {
+    return section(muted(`没有为 "${vendor.id}" 注册登录流程——检查 vendor-login 的 vendors 设置里的 provider id。`))
+  }
+  if (vendor.methods.length === 0) {
+    return section(muted(`"${vendor.id}" 只提供 API Key，没有账号登录——用这张卡片自己的 API Key 字段配置即可。`))
   }
 
-  return React.createElement('div', {
-    style: {
-      display: 'flex', flexDirection: 'column',
-      borderRadius: 12,
-      border: '1px solid var(--dsw-alias-border-l2)',
-      background: open ? 'var(--dsw-alias-bg-layer-2)' : 'var(--dsw-alias-bg-layer-3)',
-      transition: 'border-color .16s, background .16s',
-    },
-  },
-    React.createElement('button', {
-      type: 'button',
-      onClick: () => setOpen(!open),
-      style: {
-        appearance: 'none', width: '100%', font: 'inherit', textAlign: 'left', cursor: 'pointer',
-        background: 'none', border: '0', borderRadius: 12, color: 'inherit',
-        display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px',
-      },
-    },
-      React.createElement('div', { style: { display: 'flex', flexDirection: 'column', flex: 1, gap: 2, minWidth: 0 } },
+  const running = session !== null && session.status === undefined
+  const method = vendor.methods[0]
+  const detail = vendor.foreignRoute
+    ? `llm-pi-ai 的 "${vendor.route}" 路由已被别处配置，本插件不会覆盖它；模型走的是那条配置。`
+    : vendor.signedIn && vendor.routed ? '已接入模型选择器'
+    : vendor.signedIn ? '已登录，但 llm-pi-ai 里没有对应路由；模型不会出现在选择器里。'
+    : '这个套餐拿不到 API Key，登录后才能用。'
+
+  return section(
+    React.createElement('div', { key: 'head', style: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 } },
+      React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 2, flex: 1, minWidth: 0 } },
         React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8 } },
-          React.createElement('span', { style: { fontSize: 15, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } }, '厂商账号登录'),
-          running ? React.createElement('span', {
-            style: { whiteSpace: 'nowrap', background: 'var(--dsw-alias-bg-module-platform)', color: 'var(--dsw-alias-label-secondary)', borderRadius: 999, padding: '1px 8px', fontSize: 11, fontWeight: 500, lineHeight: '17px' },
-          }, '登录中') : null,
+          React.createElement('span', { style: { fontSize: 12, fontWeight: 500, color: 'var(--dsw-alias-label-secondary)' } }, '厂商账号登录'),
+          React.createElement('span', {
+            style: {
+              whiteSpace: 'nowrap' as const, borderRadius: 4, padding: '1px 6px', fontSize: 11, lineHeight: '16px',
+              ...(vendor.signedIn
+                ? { border: '.5px solid var(--dsw-alias-border-l3)', color: 'var(--dsw-alias-label-secondary)' }
+                : { color: 'var(--dsw-alias-label-tertiary)' }),
+            },
+          }, vendor.inFlight && !running ? '其他窗口登录中' : vendor.signedIn ? '已登录' : '未登录'),
         ),
-        React.createElement('div', { style: { fontSize: 13, color: 'var(--dsw-alias-label-tertiary)' } }, '登录那些拿不到 API Key、只能登录才能用的订阅套餐（Claude Pro/Max/Team · ChatGPT · Copilot · SuperGrok）'),
+        React.createElement('span', { style: { fontSize: 11, color: 'var(--dsw-alias-label-tertiary)' } }, detail),
       ),
-      React.createElement('span', {
-        style: { color: 'var(--dsw-alias-label-tertiary)', display: 'inline-flex', flex: 'none', transition: 'transform .16s', transform: open ? 'rotate(180deg)' : 'none' },
-      },
-        React.createElement('svg', { width: 14, height: 14, viewBox: '0 0 14 14', fill: 'none', 'aria-hidden': true },
-          React.createElement('path', {
-            d: 'M3.5 5.5L7 9l3.5-3.5',
-            stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round',
-          }),
-        ),
-      ),
+      vendor.signedIn
+        ? React.createElement('button', {
+            type: 'button',
+            disabled: busy,
+            onClick: () => void signout(),
+            style: { ...btnOutlineStyle, flex: 'none' as const, opacity: busy ? 0.4 : 1 },
+          }, busy ? '登出中…' : '登出')
+        : null,
+      React.createElement('button', {
+        type: 'button',
+        disabled: running,
+        onClick: () => startLogin(method.id),
+        style: { ...btnPrimaryStyle, flex: 'none' as const, opacity: running ? 0.4 : 1 },
+      }, vendor.signedIn ? '重新登录' : method.label),
     ),
-    open ? React.createElement('div', {
-      style: { display: 'flex', flexDirection: 'column', gap: 12, margin: '0 16px 4px', borderTop: '1px solid var(--dsw-alias-border-l2)', paddingTop: 12 },
-    }, ...cardBody()) : null,
+    actionError ? muted(`登出失败：${actionError}`) : null,
+    sessionPanel(),
   )
 }
 
+/**
+ * The one thing a provider card cannot report: that sign-in is unavailable
+ * everywhere. Renders nothing while it is available.
+ */
+function SignInDiagnostics() {
+  const { state, error } = useHostState()
+  // Repeating a shared-store failure inside each of a dozen provider cards is
+  // noise; it is one fact about one request, so it is reported once here.
+  if (error) {
+    return section(muted(state
+      ? `厂商账号登录：状态可能已过期——${error}`
+      : `厂商账号登录：读取状态失败——${error}`))
+  }
+  if (!state) return null
+  // The Host half checks the seam's contract at startup, so a version skew has
+  // a name by the time it gets here — show it instead of sending the user to
+  // the log for something already known.
+  if (!state.authorization) {
+    return section(muted(state.error
+      ? `厂商账号登录不可用：${state.error}`
+      : '厂商账号登录不可用：授权服务未挂载——本插件的宿主半边没能加载 @deepseek-ai/dsh-authorization。请查看 dsh 日志。'))
+  }
+  // Mounted, but not speaking what this plugin calls: the provider cards still
+  // render (signed-in state is read from the credential store, not the seam),
+  // so the reason belongs here rather than in place of them.
+  if (state.error) return section(muted(`厂商账号登录：${state.error}`))
+  return null
+}
+
+/**
+ * The section-within-a-card treatment the Models page already uses for a row's
+ * secondary content, so an injected area reads as part of the card it sits in.
+ */
+function section(...children: React.ReactNode[]) {
+  return React.createElement('div', {
+    style: {
+      display: 'flex', flexDirection: 'column', gap: 10,
+      borderTop: '.5px solid var(--dsw-alias-border-l2)',
+      paddingTop: 10,
+    },
+  }, ...children)
+}
+
+function muted(value: string) {
+  return React.createElement('span', { key: 'muted', style: { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)' } }, value)
+}
+
 const inputStyle = {
-  height: 34,
-  padding: '0 12px',
+  height: 28,
+  padding: '0 10px',
   font: 'inherit',
-  fontSize: 13,
-  borderRadius: 8,
-  border: '1px solid var(--dsw-alias-border-l2)',
+  fontSize: 12,
+  borderRadius: 14,
+  border: '.5px solid var(--dsw-alias-border-l3)',
   background: 'var(--dsw-alias-bg-layer-3)',
   color: 'var(--dsw-alias-label-primary)',
 }
 
 const btnOutlineStyle = {
-  font: 'inherit', fontSize: 13, padding: '5px 14px', borderRadius: 8, cursor: 'pointer',
-  border: '1px solid var(--dsw-alias-border-l2)', background: 'none',
-  color: 'var(--dsw-alias-label-secondary)',
+  boxSizing: 'border-box' as const, height: 28, font: 'inherit', fontSize: 12, lineHeight: '18px',
+  padding: '0 10px', borderRadius: 14, cursor: 'pointer',
+  border: '.5px solid var(--dsw-alias-border-l3)', background: 'none',
+  color: 'var(--dsw-alias-label-primary)',
 }
 
 const btnPrimaryStyle = {
-  font: 'inherit', fontSize: 13, padding: '5px 14px', borderRadius: 8, cursor: 'pointer',
-  border: '1px solid transparent', background: 'var(--dsw-alias-label-primary)',
-  color: 'var(--dsw-alias-bg-layer-3)',
-}
-
-function text(value: string) {
-  return React.createElement('span', { key: 'text', style: { fontSize: 13, color: 'var(--dsw-alias-label-tertiary)' } }, value)
+  boxSizing: 'border-box' as const, height: 28, font: 'inherit', fontSize: 12, lineHeight: '18px',
+  padding: '0 10px', borderRadius: 14, cursor: 'pointer',
+  border: 'none', background: 'var(--dsw-alias-button-primary-fill)',
+  color: 'var(--dsw-alias-label-primary-foreground)',
 }

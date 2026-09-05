@@ -22,8 +22,15 @@ Vendors that do hand out API keys are deliberately not covered: configure those 
 
 ## Requirements
 
-- dsh installed (`dsh` on PATH) and `pnpm` on PATH.
-- The `web` profile — the card only appears in the dsh Web UI.
+- dsh **0.1.2-rc.1 or newer** (`dsh` on PATH) and `pnpm` on PATH. That release added the Models-page extension slots this plugin renders into; on anything older it registers nothing and no sign-in appears.
+
+  **On an older dsh, install the `0.1.x` line instead** — same vendors, same flows, and the sign-in lives in its own card under Settings → Plugins rather than in the Models page:
+
+  ```sh
+  dsh plugin --profile web add dsh-vendor-login@^0.1.1
+  ```
+
+- The `web` profile — the sign-in only appears in the dsh Web UI.
 - A browser for authorization. The two loopback flows need ports `53692` and `1455` free on this machine; the two device-code flows listen nowhere, so the browser can be anywhere.
 
 ## Install
@@ -36,17 +43,19 @@ Then restart `dsh web`. From source: `pnpm install && pnpm build`, then `dsh plu
 
 ## Use
 
-Open **Settings → Plugins → Vendor Login**:
+Open **Settings → Models**. Every vendor below has its own provider card there, and this plugin adds a sign-in area to the bottom of each one:
 
-1. Click a vendor's sign-in button and finish the authorization in your browser.
-2. If a flow asks you to paste back a code or pick an account, do it right in the card.
+1. Click the card's sign-in button and finish the authorization in your browser.
+2. If a flow asks you to paste back a code or pick an account, do it right in that card.
 3. On success that vendor's models appear in the model picker immediately — the plugin writes the route into `llm-pi-ai` for you.
+
+Provider cards pi-ai ships that this plugin does not cover get no sign-in area at all — they are API-key providers, and their card's own key field is the way to configure them.
 
 *Sign out* deletes the stored credential locally; it does not revoke anything on the vendor side — do that from the vendor's account page. A route you have customized since (your own `baseURL`, `apiKeyEnv`, models edits) survives sign-out.
 
 ## Configuration
 
-What the card shows is controlled by `vendors` under the `vendor-login` namespace, defaulting to all four vendors above:
+Which providers get a sign-in area is controlled by `vendors` under the `vendor-login` namespace, defaulting to all four vendors above. There is no settings card for it — edit it in the profile's settings file:
 
 ```yaml
 vendors: [anthropic, openai-codex, github-copilot, xai]
