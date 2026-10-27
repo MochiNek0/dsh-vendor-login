@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "厂商账号登录",
+    "description": "在「模型」设置页的 provider 卡片里直接登录那些拿不到 API Key 的厂商套餐（Claude Pro/Max/Team、ChatGPT Plus/Pro、GitHub Copilot、SuperGrok）。"
+  }
+}

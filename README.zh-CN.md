@@ -49,6 +49,8 @@ dsh plugin --profile web add dsh-vendor-login
 2. 流程若要求粘贴授权码或选择账号，直接在这张卡片里操作。
 3. 显示成功后，这家的模型立刻出现在模型选择器里——路由已由插件自动写进 `llm-pi-ai`。
 
+卡片上的状态标签：未登录为红色，登录中为橙色，已登录为绿色。卡片文字跟随 dsh 的语言设置（中文 / English）。浏览器里授权完成后看到的页面是本插件自己的确认页，不再是 pi-ai 的页面。
+
 pi-ai 自带、但不归本插件管的那些 provider，卡片上不会多出任何东西——那些是能拿到 API Key 的，用卡片自己的 Key 字段配就行。
 
 「登出」只是本地删掉存的凭据，不会通知厂商吊销授权——要真正撤销，去各家账号页面操作。如果你后来给自动写的路由加过自己的配置（换了 `baseURL`、填了 `apiKeyEnv`、裁过 models），登出时它会保留。
@@ -67,6 +69,8 @@ vendors: [anthropic, openai-codex, github-copilot, xai]
 
 - `/plugin/vendor-login/*` 没有自己的鉴权——这点和 `/api` 不同，`/api` 前面还有 `apiproxy`。替代的是一道跨站检查：`Sec-Fetch-Site`/`Origin` 表明不是来自 dsh 自己页面的请求一律拒绝，POST 还必须是 `application/json`（这是网页无法跨站直接发出、必然触发 preflight 的 content-type）。它挡住的是你随手开着的某个网页对本机做 drive-by 登出、drive-by 启动登录流程。但它不是鉴权：把 `webServer` 绑到本机之外，这些路由对任何能连上该端口的人依然暴露，插件启动时会打 warning。
 - 登录流程活在开着的连接里：登录中途刷新页面就得重来。
+- 浏览器回调页是 pi-ai 自己返回的，它不提供自定义选项，所以本插件只在自己发起的登录进行中，通过包一层 Node 的 `http.createServer` 替换掉那张页面的 HTML。如果 pi-ai 以后改了页面，你会重新看到 pi-ai 原来的页面，登录本身不受影响。
+- 来自 pi-ai 登录流程的提示（比如 "Select OpenAI Codex login method:"）按 pi-ai 原文显示，是英文。
 - 一家同时只能有一次登录尝试；第二个窗口会被以 `ALREADY_IN_FLIGHT` 拒绝。
 - xAI 可能按订阅档位限制 OAuth 接口——部分标准档 SuperGrok 账号能完成登录、但推理返回 HTTP 403（[实例](https://github.com/NousResearch/hermes-agent/issues/26847)）。遇到就改用 console.x.ai 的 API Key 走「模型」页配置。
 

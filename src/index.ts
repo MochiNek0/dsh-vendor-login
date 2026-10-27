@@ -4,6 +4,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
+import { installCallbackPage } from './callback-page.js'
 
 export const name = 'vendor-login'
 
@@ -656,6 +657,10 @@ export function apply(ctx: Context, config: Config) {
       else res.end()
     }),
   }))
+
+  // pi-ai answers the vendor's OAuth redirect with a page of its own (pi's
+  // logo, English only); swap it for ours while one of our attempts is live.
+  ctx.effect(() => installCallbackPage(() => attempts.size > 0))
 
   // An attempt outlives no fiber: withdraw whatever is running when we unload,
   // so a reload does not leave the seam holding a key nothing will ever settle.

@@ -49,6 +49,8 @@ Open **Settings → Models**. Every vendor below has its own provider card there
 2. If a flow asks you to paste back a code or pick an account, do it right in that card.
 3. On success that vendor's models appear in the model picker immediately — the plugin writes the route into `llm-pi-ai` for you.
 
+The card's status badge reads red when signed out, orange while signing in, and green when signed in. The card follows dsh's language setting (English / 中文). After a browser sign-in, the page you land on is this plugin's own confirmation rather than pi-ai's.
+
 Provider cards pi-ai ships that this plugin does not cover get no sign-in area at all — they are API-key providers, and their card's own key field is the way to configure them.
 
 *Sign out* deletes the stored credential locally; it does not revoke anything on the vendor side — do that from the vendor's account page. A route you have customized since (your own `baseURL`, `apiKeyEnv`, models edits) survives sign-out.
@@ -67,6 +69,8 @@ Entries must be provider ids that pi-ai ships a login flow for; anything else sh
 
 - `/plugin/vendor-login/*` has no authentication of its own — unlike `/api`, which sits behind `apiproxy`. What stands in for it is a cross-site check: requests are rejected unless `Sec-Fetch-Site`/`Origin` say they came from dsh's own page, and every POST must be `application/json` (the one content type a page cannot post cross-site without a preflight). That closes drive-by sign-out and drive-by flow-starting from any page you happen to have open. It is not authentication: binding `webServer` beyond localhost still exposes these routes to anyone who can reach the port, and the plugin warns at startup when you do.
 - A login lives in an open connection: refreshing the page mid-login restarts that flow.
+- pi-ai serves the browser callback page itself and offers no way to customize it, so while one of this plugin's sign-ins is in flight the plugin swaps that page's HTML on the way out (by wrapping Node's `http.createServer`). If a pi-ai update changes the page, you simply see pi-ai's original page again; sign-in itself is unaffected.
+- Lines that come from pi-ai's flows (e.g. "Select OpenAI Codex login method:") are shown as pi-ai wrote them, in English.
 - One attempt per vendor at a time; a second window gets rejected with `ALREADY_IN_FLIGHT`.
 - xAI may gate its OAuth surface by plan tier — some standard SuperGrok accounts can complete login but get HTTP 403 on inference ([example](https://github.com/NousResearch/hermes-agent/issues/26847)). If so, use a `console.x.ai` API key via the Models page instead.
 

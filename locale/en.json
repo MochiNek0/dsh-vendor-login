@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Vendor Login",
+    "description": "Sign in to vendor coding plans that have no API key (Claude Pro/Max/Team, ChatGPT Plus/Pro, GitHub Copilot, SuperGrok) right from each provider card on the Models settings page."
+  }
+}
